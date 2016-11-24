@@ -21,8 +21,22 @@ oppDirs = {0: -1, 1: 3, 3: 1, 2: 4, 4: 2}
 cellPotential = {}
 
 moveRecord = {}
-# keep track of where the center pieces were going so they don't go back and forth
-lastCenterMove = {}
+
+
+# check if we can find a path only using moves in moves with strength under 100
+def getPath(start, moves):
+    if(sum(moves) == 0):
+        return True
+
+    for i in range(len(moves)):
+        if(moves[i] > 0):
+            if(gameMap.getSite(start, i+1).strength < 75):
+                cpy = moves[:]
+                cpy[i] -= 1
+                if getPath(gameMap.getLocation(start, i+1), cpy):
+                    return True
+    return False
+
 
 # finds my starting position
 def myStart(gameMap, myID):
@@ -96,10 +110,18 @@ def analyzeBoard(gameMap, myID):
     for key in keyList:
         if (cellPotential[key] > maxVal):
             keyloc = Location(int(key.split(',')[0]), int(key.split(',')[1]))
-            if(gameMap.getSite(keyloc).strength < 75):
+            if(gameMap.getSite(keyloc).strength < 75 and getPath(start, movesToGet(start, keyloc, gameMap.width, gameMap.height))):
                 maxVal = cellPotential[key]
                 maxKey = key
 
+    if(maxKey == ""):
+        maxVal = 0
+        for key in keyList:
+            if (cellPotential[key] > maxVal):
+                keyloc = Location(int(key.split(',')[0]), int(key.split(',')[1]))
+                if (gameMap.getSite(keyloc).strength < 75):
+                    maxVal = cellPotential[key]
+                    maxKey = key
     return maxKey
 
 
@@ -127,7 +149,7 @@ def isEdge(posn, gameMap):
     return False
 
 
-def getFilledPosns(edges, centers, moveRecord, OccupiedPosns, gameMap):
+def getFilledPosns(edges, centers, moveRecord, gameMap):
     for y in range(gameMap.height):
         for x in range(gameMap.width):
             currentSite = gameMap.getSite(Location(x, y))
@@ -138,43 +160,8 @@ def getFilledPosns(edges, centers, moveRecord, OccupiedPosns, gameMap):
                 else:
                     centers.append([Location(x, y), currentSite])
                 moveRecord[str(x)+str(y)] = 0
-            elif currentSite.owner != 0:
-                OccupiedPosns.append([Location(x, y), currentSite])
 
 
-# get's an overall feel of where opponenets are
-# returns an array of directions from "safest" to
-# most "dangerous"
-def preferredDirs(posn, OccupiedPosns, gameMap):
-    pi = 3.141592
-    # break all angles into 4 quadrants,
-    # pick one with low variance and far distance
-    avgs = [0, 0, 0, 0]  # mean
-    vari = [0, 0, 0, 0]  # variance
-    counts = [0, 0, 0, 0]  # absolute count
-    strengths = [0, 0, 0, 0]
-    for enemy in OccupiedPosns:
-        curAng = gameMap.getAngle(posn[0], enemy[0])
-        curDis = gameMap.getDistance(posn[0], enemy[0])
-        streng = enemy[1].strength
-        dirToInc = getDirection(curAng)
-
-        avgs[dirToInc - 1] += curDis
-        vari[dirToInc - 1] += (curDis) ** 2
-        strengths[dirToInc - 1] += streng
-        counts[dirToInc - 1] += 1
-
-    for i in range(4):  # get actual variance
-        if (counts[i] != 0): avgs[i] /= counts[i]
-        vari[i] = vari[i] - avgs[i] * avgs[i]
-
-    avgs = normalize(avgs)  # High average distance
-    vari = normalize(list(map(lambda x: x ** -1 if x != 0 else 0, vari)))  # prefer low variance
-    counts = normalize(list(map(lambda x: x ** -1 if x != 0 else 0, counts)))  # prefer low count
-    strengths = normalize(list(map(lambda x: x ** -1 if x != 0 else 0, strengths)))  # prefer low strength
-    sumUp = [a + b + c + d for a, b, c, d in zip(avgs, vari, counts, strengths)]
-
-    return sumUp
 
 def getDirection(curAng):
     pi = 3.141592
@@ -219,36 +206,22 @@ def movesToGet(l1, l2, width, height):
     return rtn
 
 def pickCenterDir(gameMap, posn, edges):
-    # keep a dict of previous moves so pieces dont ping pong
-    if posn[0] in lastCenterMove:
-        moves.append(Move(posn[0], lastCenterMove[posn[0]]))
-        dir = lastCenterMove[posn[0]]
-        del lastCenterMove[posn[0]]
-        lastCenterMove[gameMap.getLocation(posn[0], dir)] = dir
-    else:
-        minDis = 10000
-        minDir = 1
-        for target in edges:
-            curDis = gameMap.getDistance(posn[0], target[0])
+    minDis = 10000
+    minDir = 1
+    for target in edges:
+        curDis = gameMap.getDistance(posn[0], target[0])
 
-            # move to closest edge, prefering ones close opponents
-            if (curDis < minDis):
-                minDis = curDis
-                curAng = gameMap.getAngle(posn[0], target[0])
-                minDir = getDirection(curAng)
-            if (curDis == minDis):
-                curAng = gameMap.getAngle(posn[0], target[0])
-                dir = getDirection(curAng)
-                if (prefer.index(minDir) > prefer.index(dir)):
-                    minDir = dir
-                    minDis = curDis
+        # move to closest edge
+        if (curDis < minDis):
+            minDis = curDis
+            curAng = gameMap.getAngle(posn[0], target[0])
+            minDir = getDirection(curAng)
 
-        # TODO: the farther from an edge the sooner it should move
-        # Don't move too much wasting production
-        # TODO: Optimze production multiplier and other constant
-        if (posn[1].strength > posn[1].production * 6 or posn[1].strength * minDis > 600):
-            moves.append(Move(posn[0], minDir))
-            lastCenterMove[gameMap.getLocation(posn[0], minDir)] = minDir
+    # TODO: the farther from an edge the sooner it should move
+    # Don't move too much wasting production
+    # TODO: Optimze production multiplier and other constant
+    if (posn[1].strength > posn[1].production * 5):
+        moves.append(Move(posn[0], minDir))
 
 def pickEdgeDir(gameMap, posn, addedStrength = 0):
     values = []
@@ -327,7 +300,7 @@ setGoal = analyzeBoard(gameMap, myID)
 
 
 
-sendInit("13thPythonBot")
+sendInit("15thPythonBot")
 
 # tunnel to the goal we set from analyzing the board
 # getting the goal and processing how to get it
@@ -350,23 +323,22 @@ if(gameMap.getSite(goalLoc).strength < 75):
     while True:
         centers = []
         edges = []
-        OccupiedPosns = []
         gameMap = getFrame()
-        getFilledPosns(edges, centers, moveRecord, OccupiedPosns, gameMap)
+        getFilledPosns(edges, centers, moveRecord, gameMap)
         if(sum(movesNeeded) == 0):
             # we got to our goal!
             break
         moves = []
-        values = [1000,1000,1000,1000]
+        values = [260,260,260,260]
         strengths = [1000,1000,1000,1000]
         for i in range(4):
             if(movesNeeded[i] > 0):
                 site = gameMap.getSite(myHead, i+1)
                 strengths[i] = site.strength
                 if(site.production > 0):
-                    values[i] = site.strength/site.production
+                    values[i] = site.strength
                 else:
-                    values[i] = site.strength*2
+                    values[i] = site.strength
 
         dirToMove = values.index(min(values))+1
         strengthNeeded = strengths[dirToMove-1]
@@ -392,17 +364,24 @@ if(gameMap.getSite(goalLoc).strength < 75):
                 for posn in centers:
                     prefer = [1,2,3,4]
                     pickCenterDir(gameMap, posn, edges)
-                if(i < len(myLocations) and i < len(dirsMoved)):
-                    moves.append(Move(myLocations[i], dirsMoved[i]))
-                    sendFrame(moves)
-                    moves = []
-                    gameMap = getFrame()
-                    getFilledPosns(edges, centers, moveRecord, OccupiedPosns, gameMap)
-                    i +=1
+
+                moves.append(Move(myLocations[i], dirsMoved[i]))
+                sendFrame(moves)
+                moves = []
+                gameMap = getFrame()
+                getFilledPosns(edges, centers, moveRecord, gameMap)
+                if (i+1 >= len(myLocations) or i+1 >= len(dirsMoved)):
+                    i = max(len(myLocations)-4, 0)
+                else:
+                    i += 1
             else:
                 break
 
-
+        for j in range(0, max(len(myLocations) - 4, 0)):
+            pickEdgeDir(gameMap, [myLocations[j], gameMap.getSite(myLocations[j])])
+        for posn in centers:
+            prefer = [1, 2, 3, 4]
+            pickCenterDir(gameMap, posn, edges)
 
 
         sendFrame(moves)
@@ -417,34 +396,24 @@ while True:
     edges = []
     centers = []
 
-    OccupiedPosns = []
     if(skipFirstGet):
         skipFirstGet = False
     else:
         gameMap = getFrame()
 
-    # get's us an array of all my posns and all opponents
-    getFilledPosns(edges, centers, moveRecord,  OccupiedPosns, gameMap)
+    # get's us an array of all my posns
+    getFilledPosns(edges, centers, moveRecord, gameMap)
 
-    if (len(centers) > 0):
-        # get an idea of where enemies are
-        sums = preferredDirs(centers[len(centers) // 2], OccupiedPosns, gameMap)
-    else:
-        sums = preferredDirs(edges[len(edges) // 2], OccupiedPosns, gameMap)
 
+    #TODO
     # sums is a list of preferred directions
     # rank the directions
-    prefer = []
-    sortedSum = sorted(sums, reverse=True)
-    for i in range(4):
-        prefer.append(sortedSum.index(sums[i]) + 1)
-        sortedSum[sortedSum.index(sums[i])] = -1
+    prefer = [1,2,3,4]
+
 
     # for edges try to expand to the most worthwhile open space
     # TODO: use the information about where the most valuable tiles are
     for posn in edges:
-        if posn[0] in lastCenterMove:
-            del lastCenterMove[posn[0]]
         if (posn[1].strength != 0 and moveRecord[str(posn[0].x) + str(posn[0].y)] == 0):
             pickEdgeDir(gameMap, posn)
 
