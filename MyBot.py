@@ -1,3 +1,4 @@
+
 from hlt import *
 from networking import *
 
@@ -124,6 +125,29 @@ def analyzeBoard(gameMap, myID):
                     maxKey = key
     return maxKey
 
+def goalFromHead(gameMap, head):
+    keyList = []
+    for i in range(5, 15):
+        keyList += getRing(i, head, gameMap)
+
+    maxKey = ""
+    maxVal = 0
+    for key in keyList:
+        if (cellPotential[key] > maxVal):
+            keyloc = Location(int(key.split(',')[0]), int(key.split(',')[1]))
+            if(gameMap.getSite(keyloc).strength < 75 and getPath(head, movesToGet(head, keyloc, gameMap.width, gameMap.height))):
+                maxVal = cellPotential[key]
+                maxKey = key
+
+    if(maxKey == ""):
+        maxVal = 0
+        for key in keyList:
+            if (cellPotential[key] > maxVal):
+                keyloc = Location(int(key.split(',')[0]), int(key.split(',')[1]))
+                if (gameMap.getSite(keyloc).strength < 75):
+                    maxVal = cellPotential[key]
+                    maxKey = key
+    return maxKey
 
 def normalize(x):
     if (sum(x) != 0):
@@ -205,7 +229,7 @@ def movesToGet(l1, l2, width, height):
 
     return rtn
 
-def pickCenterDir(gameMap, posn, edges):
+def pickCenterDir(gameMap, posn, edges, moves):
     minDis = 10000
     minDir = 1
     for target in edges:
@@ -223,7 +247,7 @@ def pickCenterDir(gameMap, posn, edges):
     if (posn[1].strength > posn[1].production * 5):
         moves.append(Move(posn[0], minDir))
 
-def pickEdgeDir(gameMap, posn, addedStrength = 0):
+def pickEdgeDir(gameMap, posn, moves):
     values = []
     strengths = []
     neighbours = []
@@ -284,6 +308,86 @@ def pickEdgeDir(gameMap, posn, addedStrength = 0):
                     moves.append(Move(posn[0], 0))
         else:
             moves.append(Move(posn[0], 0))
+            
+def posnInList(posn, list):
+    for x in list:
+        if x.x == posn.x and x.y == posn.y:
+            return True
+            
+    return False
+            
+def tunnelTo(gameMap, moveRecord, myHead, myLocations, movesNeeded):
+    while True:
+        centers = []
+        edges = []
+        gameMap = getFrame()
+        getFilledPosns(edges, centers, moveRecord, gameMap)
+        if(sum(movesNeeded) == 0):
+            # we got to our goal!
+            break
+        moves = []
+        values = [260,260,260,260]
+        strengths = [1000,1000,1000,1000]
+        for i in range(4):
+            if(movesNeeded[i] > 0):
+                site = gameMap.getSite(myHead, i+1)
+                strengths[i] = site.strength
+                if(site.production > 0):
+                    values[i] = site.strength
+                else:
+                    values[i] = site.strength
+    
+        dirToMove = values.index(min(values))+1
+        strengthNeeded = strengths[dirToMove-1]
+        totalStrength = 0
+        multi = 0
+        for i in range(max(len(myLocations)-4, 0), len(myLocations)):
+            totalStrength += gameMap.getSite(myLocations[i]).strength + gameMap.getSite(myLocations[i]).production*multi
+            multi += 1
+        cascading = True
+        i = max(len(myLocations)-4, 0)
+        while(cascading):
+            if(gameMap.getSite(myHead).strength > strengthNeeded):
+                moves.append(Move(myHead, dirToMove))
+                dirsMoved.append(dirToMove)
+                movesNeeded[dirToMove-1] -= 1
+                myHead = gameMap.getLocation(myHead, dirToMove)
+                myLocations.append(myHead)
+                break
+            elif(totalStrength > strengthNeeded):
+                # cascade the strength to the head
+                cascadeTiles = myLocations[max(len(myLocations)-4, 0):]
+                for posn in edges:
+                    if(not posnInList(posn[0], cascadeTiles)):
+                        pickEdgeDir(gameMap,posn, moves)
+                for posn in centers:
+                    prefer = [1, 2, 3, 4]
+                    if(not posnInList(posn[0], cascadeTiles)):
+                        pickCenterDir(gameMap, posn, edges, moves)
+                moves.append(Move(myLocations[i], dirsMoved[i]))
+                sendFrame(moves)
+                moves = []
+                gameMap = getFrame()
+                getFilledPosns(edges, centers, moveRecord, gameMap)
+                if (i+1 >= len(myLocations) or i+1 >= len(dirsMoved)):
+                    i = max(len(myLocations)-4, 0)
+                else:
+                    i += 1
+            else:
+                break
+    
+        cascadeTiles = myLocations[max(len(myLocations)-4, 0):]
+        for posn in edges:
+            if(not posnInList(posn[0], cascadeTiles)):
+                pickEdgeDir(gameMap,posn, moves)
+        for posn in centers:
+            prefer = [1, 2, 3, 4]
+            if(not posnInList(posn[0], cascadeTiles)):
+                pickCenterDir(gameMap, posn, edges, moves)
+    
+    
+        sendFrame(moves)
+    return myHead
 
 
 ##############################################################
@@ -305,89 +409,28 @@ sendInit("15thPythonBot")
 # tunnel to the goal we set from analyzing the board
 # getting the goal and processing how to get it
 goalLoc = Location(int(setGoal.split(',')[0]), int(setGoal.split(',')[1]))
-tunneling = True
 myLocations = []
 myHead = myStart(gameMap, myID)
 myLocations.append(myHead)
 movesNeeded = movesToGet(myLocations[0], goalLoc, gameMap.width, gameMap.height)
 dirsMoved = []
 
-#with open("test.txt", "a") as myfile:
-#    myfile.write("got end")
+moves = []
+nextHead = tunnelTo(gameMap, moveRecord, myHead, myLocations, movesNeeded)
+sendFrame([])
 
-# array in the form of moves needed [N, E, S, W]
-skipFirstGet = False
-# don't bother with goal if it's too hard to get
-# TODO: Optimize
-if(gameMap.getSite(goalLoc).strength < 75):
-    while True:
-        centers = []
-        edges = []
-        gameMap = getFrame()
-        getFilledPosns(edges, centers, moveRecord, gameMap)
-        if(sum(movesNeeded) == 0):
-            # we got to our goal!
-            break
-        moves = []
-        values = [260,260,260,260]
-        strengths = [1000,1000,1000,1000]
-        for i in range(4):
-            if(movesNeeded[i] > 0):
-                site = gameMap.getSite(myHead, i+1)
-                strengths[i] = site.strength
-                if(site.production > 0):
-                    values[i] = site.strength
-                else:
-                    values[i] = site.strength
-
-        dirToMove = values.index(min(values))+1
-        strengthNeeded = strengths[dirToMove-1]
-        totalStrength = 0
-        multi = 0
-        for i in range(max(len(myLocations)-4, 0), len(myLocations)):
-            totalStrength += gameMap.getSite(myLocations[i]).strength + gameMap.getSite(myLocations[i]).production*multi
-            multi += 1
-        cascading = True
-        i = max(len(myLocations)-4, 0)
-        while(cascading):
-            if(gameMap.getSite(myHead).strength > strengthNeeded):
-                moves.append(Move(myHead, dirToMove))
-                dirsMoved.append(dirToMove)
-                movesNeeded[dirToMove-1] -= 1
-                myHead = gameMap.getLocation(myHead, dirToMove)
-                myLocations.append(myHead)
-                break
-            elif(totalStrength > strengthNeeded):
-                # cascade the strength to the head
-                for j in range(0, max(len(myLocations)-4, 0)):
-                    pickEdgeDir(gameMap, [myLocations[j], gameMap.getSite(myLocations[j])])
-                for posn in centers:
-                    prefer = [1,2,3,4]
-                    pickCenterDir(gameMap, posn, edges)
-
-                moves.append(Move(myLocations[i], dirsMoved[i]))
-                sendFrame(moves)
-                moves = []
-                gameMap = getFrame()
-                getFilledPosns(edges, centers, moveRecord, gameMap)
-                if (i+1 >= len(myLocations) or i+1 >= len(dirsMoved)):
-                    i = max(len(myLocations)-4, 0)
-                else:
-                    i += 1
-            else:
-                break
-
-        for j in range(0, max(len(myLocations) - 4, 0)):
-            pickEdgeDir(gameMap, [myLocations[j], gameMap.getSite(myLocations[j])])
-        for posn in centers:
-            prefer = [1, 2, 3, 4]
-            pickCenterDir(gameMap, posn, edges)
+# tunnel to the next goal based on where we ended
+setGoal = goalFromHead(gameMap, nextHead)
+goalLoc = Location(int(setGoal.split(',')[0]), int(setGoal.split(',')[1]))
+myLocations = []
+myLocations.append(nextHead)
+movesNeeded = movesToGet(myLocations[0], goalLoc, gameMap.width, gameMap.height)
+dirsMoved = []
+tunnelTo(gameMap, moveRecord, nextHead, myLocations, movesNeeded)
 
 
-        sendFrame(moves)
 
-
-    skipFirstGet = True
+skipFirstGet = True
 
 while True:
     moves = []
@@ -415,13 +458,13 @@ while True:
     # TODO: use the information about where the most valuable tiles are
     for posn in edges:
         if (posn[1].strength != 0 and moveRecord[str(posn[0].x) + str(posn[0].y)] == 0):
-            pickEdgeDir(gameMap, posn)
+            pickEdgeDir(gameMap, posn, moves)
 
     # move centers to closest edge
     # use the information of where the enemies are to prefer
     # expansion away
     for posn in centers:
-        pickCenterDir(gameMap, posn, edges)
+        pickCenterDir(gameMap, posn, edges, moves)
 
 
     sendFrame(moves)
